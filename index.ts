@@ -4,6 +4,7 @@ import type {
   CompletionStreamEvent,
   CompletionTool,
 } from "adminforth";
+import { ChatAnthropic } from "@langchain/anthropic";
 import Anthropic from "@anthropic-ai/sdk";
 import { jsonSchemaOutputFormat } from "@anthropic-ai/sdk/helpers/json-schema";
 
@@ -21,6 +22,8 @@ type ReasoningEffort =
   | "medium"
   | "high"
   | "xhigh";
+
+type AgentModelPurpose = "primary" | "summary";
 
 type CompletionRequestInput = {
   content: string;
@@ -156,6 +159,12 @@ function mapReasoningToThinking(
   };
 }
 
+function getAgentReasoningEffort(
+  purpose: AgentModelPurpose,
+): ReasoningEffort {
+  return purpose === "summary" ? "minimal" : "low";
+}
+
 export default class CompletionAdapterAntropicMessages
   implements CompletionAdapter
 {
@@ -191,6 +200,35 @@ export default class CompletionAdapterAntropicMessages
     });
 
     return response.input_tokens;
+  }
+
+  getLangChainAgentSpec(params: {
+    maxTokens: number;
+    purpose: AgentModelPurpose;
+  }) {
+    const extraRequestBodyParameters = {
+      ...(this.options.extraRequestBodyParameters || {}),
+    } as Record<string, unknown> & {
+      thinking?: { type: "enabled"; budget_tokens: number };
+    };
+    const thinking =
+      extraRequestBodyParameters.thinking ||
+      mapReasoningToThinking(
+        getAgentReasoningEffort(params.purpose),
+        params.maxTokens,
+      );
+
+    delete extraRequestBodyParameters.thinking;
+
+    return {
+      model: new ChatAnthropic({
+        model: this.options.model || "claude-sonnet-4-5-20250929",
+        apiKey: getApiKey(this.options),
+        maxTokens: params.maxTokens,
+        ...(thinking ? { thinking } : {}),
+        invocationKwargs: extraRequestBodyParameters,
+      } as any),
+    };
   }
 
   complete = async (
