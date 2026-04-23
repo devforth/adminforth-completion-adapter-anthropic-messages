@@ -1,0 +1,31 @@
+{
+  "name": "@adminforth/completion-adapter-antropic-messages",
+  "version": "2.0.0",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "type": "module",
+  "scripts": {
+    "build": "tsc && npm version patch",
+    "rollout": "npm run build && npm publish --access public"
+  },
+  "keywords": [
+    "adminforth",
+    "anthropic",
+    "claude",
+    "messages api",
+    "ai completion",
+    "completion adapter"
+  ],
+  "author": "DevForth (https://devforth.io)",
+  "license": "MIT",
+  "description": "AdminForth completion adapter for the Anthropic Messages API.",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.90.0"
+  },
+  "peerDependencies": {
+    "adminforth": "^2.24.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}
