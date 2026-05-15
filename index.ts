@@ -245,7 +245,7 @@ function createAnthropicSystemMessageMiddleware() {
   };
 }
 
-export default class CompletionAdapterAntropicMessages
+export default class CompletionAdapterAnthropicMessages
   implements CompletionAdapter
 {
   options: AdapterOptions;
