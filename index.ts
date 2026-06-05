@@ -43,6 +43,7 @@ type AnthropicMessageLike = {
   content?: Array<any>;
   stop_reason?: string | null;
   parsed_output?: unknown;
+  usage?: AnthropicUsage;
 };
 
 type AnthropicToolUseBlock = {
@@ -65,6 +66,19 @@ type LangChainModelCallRequest = {
     concat: (content: string) => LangChainMessageLike;
   };
   messages: LangChainMessageLike[];
+};
+
+type AnthropicUsage = {
+  input_tokens?: number;
+  cache_creation_input_tokens?: number | null;
+  cache_read_input_tokens?: number | null;
+  output_tokens?: number;
+};
+
+type UsedTokens = {
+  input_uncached: number;
+  input_cached: number;
+  output: number;
 };
 
 function getApiKey(options: AdapterOptions): string | undefined {
@@ -110,6 +124,21 @@ function extractReasoning(data: AnthropicMessageLike): string | undefined {
   }
 
   return reasoning || undefined;
+}
+
+function extractUsedTokens(data: AnthropicMessageLike): UsedTokens | undefined {
+  const usage = data.usage;
+  if (!usage) return undefined;
+
+  const inputTokens = usage.input_tokens ?? 0;
+  const cacheWriteTokens = usage.cache_creation_input_tokens ?? 0;
+  const cacheReadTokens = usage.cache_read_input_tokens ?? 0;
+
+  return {
+    input_uncached: inputTokens + cacheWriteTokens,
+    input_cached: cacheReadTokens,
+    output: usage.output_tokens ?? 0,
+  };
 }
 
 function extractToolUse(data: AnthropicMessageLike): AnthropicToolUseBlock | undefined {
@@ -323,6 +352,7 @@ export default class CompletionAdapterAnthropicMessages
     content?: string;
     finishReason?: string;
     error?: string;
+    used_tokens?: UsedTokens;
   }> => {
     const request =
       typeof requestOrContent === "string"
@@ -386,6 +416,7 @@ export default class CompletionAdapterAnthropicMessages
             ? extractOutputText(parsedMessage)
             : JSON.stringify(parsedMessage.parsed_output);
         const parsedReasoning = extractReasoning(parsedMessage);
+        const usedTokens = extractUsedTokens(parsedMessage);
 
         if (parsedReasoning && isStreaming) {
           await streamChunkCallback?.(parsedReasoning, {
@@ -417,11 +448,13 @@ export default class CompletionAdapterAnthropicMessages
             return {
               content: toolResult,
               finishReason: "tool_call",
+              used_tokens: usedTokens,
             };
           } catch (error) {
             return {
               error: getErrorMessage(error),
               finishReason: "tool_call",
+              used_tokens: usedTokens,
             };
           }
         }
@@ -429,6 +462,7 @@ export default class CompletionAdapterAnthropicMessages
         return {
           content: parsedOutput || undefined,
           finishReason: parsedMessage.stop_reason || undefined,
+          used_tokens: usedTokens,
         };
       }
 
@@ -436,6 +470,7 @@ export default class CompletionAdapterAnthropicMessages
         const message = (await this.getClient().messages.create(
           body as any,
         )) as AnthropicMessageLike;
+        const usedTokens = extractUsedTokens(message);
 
         const toolUse = extractToolUse(message);
         if (toolUse) {
@@ -444,11 +479,13 @@ export default class CompletionAdapterAnthropicMessages
             return {
               content: toolResult,
               finishReason: "tool_call",
+              used_tokens: usedTokens,
             };
           } catch (error) {
             return {
               error: getErrorMessage(error),
               finishReason: "tool_call",
+              used_tokens: usedTokens,
             };
           }
         }
@@ -456,6 +493,7 @@ export default class CompletionAdapterAnthropicMessages
         return {
           content: extractOutputText(message) || undefined,
           finishReason: message.stop_reason || undefined,
+          used_tokens: usedTokens,
         };
       }
 
@@ -492,6 +530,7 @@ export default class CompletionAdapterAnthropicMessages
       const message = (await stream.finalMessage()) as AnthropicMessageLike;
       const finalContent = extractOutputText(message);
       const finalReasoning = extractReasoning(message) || "";
+      const usedTokens = extractUsedTokens(message);
 
       if (finalReasoning && finalReasoning !== fullReasoning) {
         const delta = finalReasoning.startsWith(fullReasoning)
@@ -541,12 +580,14 @@ export default class CompletionAdapterAnthropicMessages
           return {
             content: toolResult,
             finishReason: "tool_call",
+            used_tokens: usedTokens,
           };
         } catch (error) {
           return {
             error: getErrorMessage(error),
             content: fullContent || undefined,
             finishReason: "tool_call",
+            used_tokens: usedTokens,
           };
         }
       }
@@ -554,6 +595,7 @@ export default class CompletionAdapterAnthropicMessages
       return {
         content: fullContent || undefined,
         finishReason: message.stop_reason || undefined,
+        used_tokens: usedTokens,
       };
     } catch (error) {
       return {
