@@ -8,19 +8,12 @@ import {
 
 export type AgentModelPurpose = "primary" | "summary";
 
-type LangChainMessageLike = {
-  content?: unknown;
-  text?: string;
-  type?: string;
-  getType?: () => string;
-  _getType?: () => string;
-};
+type LangChainContentBlock = Record<string, unknown> & { type?: string };
 
 type LangChainModelCallRequest = {
-  systemMessage: LangChainMessageLike & {
-    concat: (content: string) => LangChainMessageLike;
-  };
-  messages: LangChainMessageLike[];
+  systemMessage?: { content?: unknown };
+  messages?: unknown[];
+  modelSettings?: Record<string, unknown>;
 };
 
 function getAgentReasoningEffort(
@@ -29,67 +22,61 @@ function getAgentReasoningEffort(
   return purpose === "summary" ? "minimal" : "low";
 }
 
-function isSystemMessage(message: LangChainMessageLike): boolean {
-  return (
-    message._getType?.() === "system" ||
-    message.getType?.() === "system" ||
-    message.type === "system"
-  );
-}
-
-function contentToText(content: unknown, text?: string): string {
-  if (text) return text;
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-
-  return content
-    .map((block) => {
-      if (typeof block === "string") return block;
-      if (block && typeof block === "object" && "text" in block) {
-        return String(block.text ?? "");
-      }
-      return "";
-    })
-    .join("");
-}
-
-function normalizeAnthropicSystemMessages<T extends LangChainModelCallRequest>(
+function markSystemPromptCacheBreakpoint<T extends LangChainModelCallRequest>(
   request: T,
 ): T {
-  const existingSystemText = contentToText(
-    request.systemMessage.content,
-    request.systemMessage.text,
-  );
-  const extraSystemText = request.messages
-    .filter(isSystemMessage)
-    .map((message) => contentToText(message.content, message.text))
-    .filter((text) => text && text !== existingSystemText)
-    .join("\n\n");
+  const content = request.systemMessage?.content;
 
-  if (!extraSystemText) {
-    return {
-      ...request,
-      messages: request.messages.filter((message) => !isSystemMessage(message)),
-    };
+  if (!Array.isArray(content) || content.length === 0) {
+    return request;
   }
 
-  const systemMessage = request.systemMessage.concat(extraSystemText);
+  const blocks = content as LangChainContentBlock[];
+
+  if (blocks[0].type !== "text" || blocks[0].cache_control) {
+    return request;
+  }
 
   return {
     ...request,
-    systemMessage,
-    messages: request.messages.filter((message) => !isSystemMessage(message)),
+    systemMessage: {
+      ...request.systemMessage,
+      content: [
+        { ...blocks[0], cache_control: { type: "ephemeral" } },
+        ...blocks.slice(1),
+      ],
+    },
   };
 }
 
-function createAnthropicSystemMessageMiddleware() {
+function markHistoryCacheBreakpoint<T extends LangChainModelCallRequest>(
+  request: T,
+): T {
+  // Nothing to anchor a breakpoint to, and never override an explicit setting.
+  if (!request.messages?.length || request.modelSettings?.cache_control) {
+    return request;
+  }
+
   return {
-    name: "AnthropicSystemMessageMiddleware",
+    ...request,
+    modelSettings: {
+      ...request.modelSettings,
+      // No `ttl` — Anthropic defaults to 5 minutes, refreshed on every cache hit.
+      cache_control: { type: "ephemeral" },
+    },
+  };
+}
+
+function createAnthropicPromptCachingMiddleware() {
+  return {
+    name: "AnthropicPromptCachingMiddleware",
     async wrapModelCall(
       request: LangChainModelCallRequest,
       handler: (request: LangChainModelCallRequest) => unknown,
     ) {
-      return handler(normalizeAnthropicSystemMessages(request));
+      return handler(
+        markHistoryCacheBreakpoint(markSystemPromptCacheBreakpoint(request)),
+      );
     },
   };
 }
@@ -121,6 +108,6 @@ export function createLangChainAgentSpec(params: {
       ...(thinking ? { thinking } : {}),
       invocationKwargs: extraRequestBodyParameters,
     } as any),
-    middleware: [createAnthropicSystemMessageMiddleware()],
+    middleware: [createAnthropicPromptCachingMiddleware()],
   };
 }
